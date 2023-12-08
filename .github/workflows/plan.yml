@@ -20,6 +20,11 @@ on:
         required: false
         default: 1.5.6
         type: string
+      lambdas_root_directory:
+        required: false
+        default: src
+        type: string
+
 concurrency:
   group: ${{ github.ref }}
   cancel-in-progress: true
@@ -42,6 +47,8 @@ jobs:
       - name: Run Prerequisites
         id: prerequisites
         uses: IAG-Ent/.github/.github/actions/prerequisites@main
+          lambdas_root_directory: inputs.lambdas_root_directory
+
   lambda_tests_and_package:
     name: "Run Lambda Tests and Package"
     runs-on: ubuntu-latest
@@ -62,7 +69,7 @@ jobs:
           python_version_matrix: "${{ matrix.python-version  }}"
           aws_role: ${{ vars.AWS_OIDC_ROLE }}
           aws_account_id: "${{ vars.ACCOUNT_ID }}"
-    
+
   terraform_plan:
     name: "Terraform Plan ${{ inputs.env_name }}"
     runs-on: ubuntu-latest
@@ -71,7 +78,7 @@ jobs:
     env:
       TF_VAR_org_environment: ${{ inputs.env_name }}
       TF_VAR_ecp_release_version: ${{ needs.prerequisites.outputs.ecp_release_version }}
-    needs: 
+    needs:
       - prerequisites
       - lambda_tests_and_package
     steps:
