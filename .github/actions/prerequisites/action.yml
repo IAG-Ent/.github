@@ -1,6 +1,12 @@
 name: Prerequisites
 description: prerequisites
 
+inputs:
+  lambdas_root_directory:
+    description: 'List of Lambda names to test. These should be lambda directories with tests folder in there. See example-repo'
+    required: false
+    default: 'src'
+
 outputs:
   ecp_release_version:
     description: ""
@@ -21,27 +27,29 @@ runs:
     - name: Set variable
       id: prerequisite_variables
       shell: bash
-      run: |          
+      run: |
         ecp_release_version=$(jq -r .ecp_release_version ./metadata.json)
         echo "ecp_release_version=${ecp_release_version}" >> "$GITHUB_OUTPUT"
         echo "ECP Release Version: ${ecp_release_version}"
         normalized_git_branch=$(echo ${{ github.ref_name }} | tr / -)
         echo "normalized_git_branch=${normalized_git_branch}" >> "$GITHUB_OUTPUT"
         echo "Normalized Git Branch: ${normalized_git_branch}"
+
     - uses: dorny/paths-filter@v2
       id: changes
       with:
         list-files: 'escape'
         filters: |
           lambda_changes:
-            - 'src/**'
+            - '${{ inputs.lambdas_root_directory }}/**'
+
     - name: Check Lambda changes
       id: lambdas_changed
       shell: bash
       run: |
         echo "There has been ${{ steps.changes.outputs.lambda_changes_count }} changes to lambdas detected"
         echo "${{ steps.changes.outputs.lambda_changes_files }}"
-        
+
         lambdas_changed=()
         for file_changed in $(echo "${{ steps.changes.outputs.lambda_changes_files }}" ); do
           echo $file_changed
