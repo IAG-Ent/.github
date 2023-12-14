@@ -4,26 +4,28 @@ inputs:
   lambda_names:
     description: 'List of Lambda names to test. These should be lambda directories with tests folder in there. See example-repo'
     required: true
-  python_version_matrix:
-    description: 'Lst of python versions'
+  lambdas_root_directory:
+    description: 'List of Lambda names to test. These should be lambda directories with tests folder in there. See example-repo'
+    required: false
+    default: 'src'
+  python_version:
+    description: 'Python version to test and package with'
     required: true
   aws_role:
     description: 'Role to assume'
     required: true
-  aws_account_id:
-    description: 'AWS account id'
+  lambda_code_bucket:
+    description: 'AWS S3 bucket to upload code to'
     required: true
 
 runs:
   using: "composite"
   steps:
-    - name: Checkout
-      uses: actions/checkout@v3
-
-    - name: Set up Python ${{ inputs.python_version_matrix }}
+    - name: Set up Python ${{ inputs.python_version }}
       uses: actions/setup-python@v4
       with:
-        python-version: ${{ inputs.python_version_matrix }}
+        python-version: ${{ inputs.python_version }}
+
     - name: Install testing dependencies
       shell: bash
       run: |
@@ -31,9 +33,9 @@ runs:
         pip install black pytest
 
         IFS=',' read -ra LAMBDA_MODULES <<< "${{ inputs.lambda_names }}"
-        echo 
+        echo
         for module_directory in "${LAMBDA_MODULES[@]}"; do
-          pushd src/${module_directory}
+          pushd ${{ inputs.lambdas_root_directory }}/${module_directory}
 
           pwd
 
@@ -53,20 +55,22 @@ runs:
 
           popd
         done
+
     - name: Lint with Black
       shell: bash
       run: |
-        cd src/${module_directory}
+        cd ${{ inputs.lambdas_root_directory }}/${module_directory}
         black . --check
+
     - name: Test with pytest
       shell: bash
       run: |
-        IFS=',' read -ra LAMBDA_MODULES <<< "${{ inputs.lambda_names  }}"
+        IFS=',' read -ra LAMBDA_MODULES <<< "${{ inputs.lambda_names }}"
         for module_directory in "${LAMBDA_MODULES[@]}"; do
-          pushd src/${module_directory}
-          pwd 
+          pushd ${{ inputs.lambdas_root_directory }}/${module_directory}
+          pwd
           ls
-          echo 
+          echo
           if [[ -d 'tests' ]]; then
             source venv/bin/activate
             pip list
@@ -78,39 +82,41 @@ runs:
           fi
           popd
         done
+
     - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v2
       with:
         aws-region: eu-west-1
         role-to-assume: ${{ inputs.aws_role }}
         role-session-name: LambdaPackagingJob
+
     - name: Package Lambda Code
       id: lambda_package
       shell: bash
       run: |
-        IFS=',' read -ra LAMBDA_MODULES <<< "${{ inputs.lambda_names  }}"
+        IFS=',' read -ra LAMBDA_MODULES <<< "${{ inputs.lambda_names }}"
         for module_directory in "${LAMBDA_MODULES[@]}"; do
           module=${module_directory//_/-}
 
           zip_name="${module_directory}.zip"
-          echo "Packaging with zip name ${zip_name} in src/${module_directory}"
-          mkdir ${module}-dist
+          echo "Packaging with zip name ${zip_name} in ${{ inputs.lambdas_root_directory }}/${module_directory}"
+          mkdir dist
 
-          pushd src/${module_directory}
+          pushd ${{ inputs.lambdas_root_directory }}/${module_directory}
 
           if [[ -f requirements.txt ]]; then
-            pip install -r requirements.txt --target ../../${module}-dist
-            pip install --platform manylinux2010_x86_64 --implementation cp --only-binary=:all: --upgrade --target ../../${module}-dist cryptography
+            pip install -r requirements.txt --target ../../dist
+            pip install --platform manylinux2010_x86_64 --implementation cp --only-binary=:all: --upgrade --target ../../dist cryptography
           fi
 
-          rsync -ax --exclude venv --exclude tests . ../../${module}-dist
+          rsync -ax --exclude venv --exclude tests . ../../dist
 
-          pushd ../../${module}-dist
+          pushd ../../dist
 
           zip -r ${zip_name} *
 
-          echo "Uploading zip to ccoe-ecp-${{ inputs.aws_account_id }}-eu-west-1-lambda-code"
-          aws s3api put-object --bucket ccoe-ecp-${{ inputs.aws_account_id }}-eu-west-1-lambda-code --key $zip_name --body $zip_name
+          echo "Uploading zip to ${{ inputs.lambda_code_bucket }}"
+          aws s3api put-object --bucket ${{ inputs.lambda_code_bucket }} --key $zip_name --body $zip_name
 
           popd
           popd

@@ -13,10 +13,12 @@ outputs:
     value: ${{ steps.prerequisite_variables.outputs.ecp_release_version }}
   normalized_git_branch:
     description: ""
-    value: ${{ steps.prerequisite_variables.outputs.normalized_git_branch  }}
+    value: ${{ steps.prerequisite_variables.outputs.normalized_git_branch }}
   lambdas_changed:
     description: ""
     value: ${{ steps.lambdas_changed.outputs.lambdas_changed }}
+  has_jinja_files:
+    value: ${{ steps.prerequisite_variables.outputs.has_jinja_files }}
 
 runs:
   using: "composite"
@@ -34,6 +36,14 @@ runs:
         normalized_git_branch=$(echo ${{ github.ref_name }} | tr / -)
         echo "normalized_git_branch=${normalized_git_branch}" >> "$GITHUB_OUTPUT"
         echo "Normalized Git Branch: ${normalized_git_branch}"
+        status_code=$(ls ${{ env.TARGET_DIR }} | grep -q '.jinja$'; echo $?) || true
+        if [[ $status_code == "0" ]]; then
+          has_jinja_files='true'
+        else
+          has_jinja_files='false'
+        fi
+        echo "has_jinja_files=${has_jinja_files}" >> "$GITHUB_OUTPUT"
+        echo "Has Jinja Files: ${has_jinja_files}"
 
     - uses: dorny/paths-filter@v2
       id: changes
@@ -53,7 +63,7 @@ runs:
         lambdas_changed=()
         for file_changed in $(echo "${{ steps.changes.outputs.lambda_changes_files }}" ); do
           echo $file_changed
-          lambda=$(echo $file_changed | cut -d'/' -f2)
+          lambda=$(echo $file_changed | sed 's#^${{ inputs.lambdas_root_directory }}/*##' | cut -d'/' -f1)
           echo "${lambdas_changed[@]}" | grep -w "$lambda" || {
             lambdas_changed+=($lambda)
           }

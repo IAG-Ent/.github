@@ -24,14 +24,18 @@ inputs:
   tf_working_dir:
     description: 'The Terraform Directory to run in'
     required: true
+  jinja_templating:
+    description: 'Whether to run Jinja templating with metadata'
+    required: false
+    default: false
 
 outputs:
   terraform_plan_exitcode:
     description: "Whether changes are needed to the plan"
-    value: ${{ steps.plan.outputs.exitcode }}
+    value: steps.plan.outputs.exitcode
   terraform_apply_output:
     description: "Everything output by Terraform apply"
-    value: ${{ steps.output.outputs.tf_output_json }}
+    value: steps.output.outputs.tf_output_json
 
 runs:
   using: "composite"
@@ -39,18 +43,41 @@ runs:
     - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v2
       with:
-        aws-region: ${{ inputs.aws_region }}
-        role-to-assume: ${{ inputs.aws_role }}
+        aws-region: inputs.aws_region
+        role-to-assume: inputs.aws_role
         role-session-name: TerraformApplyJob
+
+    - name: Setup Python
+      uses: actions/setup-python@v4 # https://github.com/actions/setup-python
+      if: inputs.jinja_templating == 'true'
+      with:
+        python-version: '3.10.x'
+
+    - name: Run Jinja to Generate Terraform
+      if: inputs.jinja_templating == 'true'
+      working-directory: env.TARGET_DIR
+      shell: bash
+      run: |
+        pip install jinja2-cli jinja2
+
+        cat ../../metadata.json | jq -c | sed -e 's/^/{% set metadata = /' -e 's/$/ %}/' > metadata.jinja
+        cat metadata.jinja
+
+        for f in *.jinja; do
+          jinja2 $f >> ./$(basename $f .jinja).tf
+
+          echo "Built terraform:"
+          cat ./$(basename $f .jinja).tf
+        done
 
     - name: "setup-terraform"
       uses: hashicorp/setup-terraform@v2
       with:
-        terraform_version: ${{ inputs.terraform_version }}
+        terraform_version: inputs.terraform_version
 
     - name: "Terraform Backend Config"
       id: backend
-      working-directory: ${{ inputs.tf_working_dir }}
+      working-directory: inputs.tf_working_dir
       shell: bash
       run: |
         cat > backend.conf << EOF
@@ -60,36 +87,36 @@ runs:
 
     - name: "Terraform Init"
       id: init
-      working-directory: ${{ inputs.tf_working_dir }}
+      working-directory: inputs.tf_working_dir
       shell: bash
       run: terraform init -input=false -backend-config=./backend.conf
 
     - name: "Terraform Validate"
       id: validate
-      working-directory: ${{ inputs.tf_working_dir }}
+      working-directory: inputs.tf_working_dir
       shell: bash
-      if: ${{ inputs.terraform_action == 'plan' }}
+      if: inputs.terraform_action == 'plan'
       run: terraform validate -no-color
 
     - name: "Terraform Plan"
       id: plan
-      working-directory: ${{ inputs.tf_working_dir }}
+      working-directory: inputs.tf_working_dir
       shell: bash
-      if: ${{ inputs.terraform_action == 'plan' }}
+      if: inputs.terraform_action == 'plan'
       run: terraform plan -detailed-exitcode
 
     - name: "Terraform Apply"
       id: apply
-      working-directory: ${{ inputs.tf_working_dir }}
+      working-directory: inputs.tf_working_dir
       shell: bash
-      if: ${{ inputs.terraform_action == 'apply' }}
+      if: inputs.terraform_action == 'apply'
       run: terraform apply -input=false -auto-approve
-  
+
     - name: "Terraform Output"
       id: output
-      working-directory: ${{ inputs.tf_working_dir }}
+      working-directory: inputs.tf_working_dir
       shell: bash
-      if: ${{ inputs.terraform_action == 'apply' }}
+      if: inputs.terraform_action == 'apply'
       run: |
         # `terraform-bin` because: https://stackoverflow.com/questions/69925970/how-to-save-terraform-output-variable-into-a-github-action-s-environment-variabl
         echo "tf_output_json=$(terraform-bin output -json -no-color | jq -c)" >> $GITHUB_OUTPUT

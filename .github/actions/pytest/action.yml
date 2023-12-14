@@ -4,7 +4,7 @@ inputs:
   working_dir:
     description: 'Directory where tests live'
     required: true
-  python_version_matrix:
+  python_version:
     description: 'Lst of python versions'
     required: true
 
@@ -14,10 +14,11 @@ runs:
     - name: Checkout
       uses: actions/checkout@v3
 
-    - name: Set up Python ${{ inputs.python_version_matrix }}
+    - name: Set up Python ${{ inputs.python_version }}
       uses: actions/setup-python@v4
       with:
-        python-version: ${{ inputs.python_version_matrix }}
+        python-version: ${{ inputs.python_version }}
+
     - name: Install testing dependencies
       shell: bash
       run: |
@@ -39,14 +40,16 @@ runs:
         pip list
 
         deactivate
+
     - name: Lint with Black
       shell: bash
       run: |
         black . --check
+
     - name: Test with pytest
       shell: bash
       run: |
-        pwd 
+        pwd
 
         source venv/bin/activate
         pip list

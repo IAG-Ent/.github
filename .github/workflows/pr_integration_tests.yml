@@ -3,18 +3,39 @@ name: PR Workflow
 on:
   workflow_call:
     inputs:
-      env_name:
+      name:
         required: true
         type: string
+      dev_env_name:
+        required: false
+        type: string
+        default: Dev
       protected_env_name:
-        required: true
+        required: false
         type: string
+        default: Dev-Protected
+      prd_env_name:
+        required: false
+        type: string
+        default: Prd
       aws_region:
         required: true
         type: string
       tf_working_dir:
         required: true
         type: string
+      aws_oidc_role:
+        required: false
+        type: string
+        default: ${{ vars.AWS_OIDC_ROLE }}
+      aws_account_id:
+        required: false
+        type: string
+        default: ${{ vars.ACCOUNT_ID }}
+      lambda_code_bucket:
+        required: false
+        type: string
+        default: 'ccoe-ecp-${{ inputs.aws_account_id }}-eu-west-1-lambda-code'
       tf_version:
         required: false
         default: 1.5.6
@@ -23,24 +44,32 @@ on:
         required: false
         default: true
         type: boolean
+      lambdas_root_directory:
+        required: false
+        default: src
+        type: string
+      lambda_python_version:
+        required: false
+        default: '3.10'
+        type: string
       test_tf_working_dir:
         required: true
         type: string
       integration_tests_dir:
         required: true
         type: string
+
 concurrency:
   group: pr-workflow
 permissions:
   id-token: write
   contents: read
-  pull-requests: write
+  pull-requests: read
 
 jobs:
   prerequisites:
     name: "Prerequisites"
     runs-on: ubuntu-latest
-    environment: ${{ inputs.env_name }}
     outputs:
       lambdas_changed: ${{ steps.prerequisites.outputs.lambdas_changed }}
       ecp_release_version: ${{ steps.prerequisites.outputs.ecp_release_version }}
@@ -50,37 +79,41 @@ jobs:
 
       - name: Run Prerequisites
         id: prerequisites
-        uses: IAG-Ent/.github/.github/actions/prerequisites@main
+        uses: IAG-Ent/.github/.github/actions/prerequisites@CRSS-1754-organizations-repo-changes
+        with:
+          lambdas_root_directory: inputs.lambdas_root_directory
+
   lambda_tests_and_package:
     name: "Run Lambda Tests and Package"
     runs-on: ubuntu-latest
-    environment: ${{ inputs.env_name }}
+    environment: inputs.dev_env_name
+    if: inputs.run_lambda_steps == true && needs.prerequisites.outputs.lambdas_changed != ''
     needs: prerequisites
     strategy:
       matrix:
-        python-version: [ "3.10" ]
+        python-version: [ inputs.lambda_python_version ]
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
 
       - name: Run Lambda Tests and Package
-        if: inputs.run_lambda_steps == true
-        uses: IAG-Ent/.github/.github/actions/lambda_tests_and_package@main
+        uses: IAG-Ent/.github/.github/actions/lambda_tests_and_package@CRSS-1754-organizations-repo-changes
         with:
-          lambda_names: "${{ needs.prerequisites.outputs.lambdas_changed  }}"
-          python_version_matrix: "${{ matrix.python-version  }}"
-          aws_role: ${{ vars.AWS_OIDC_ROLE }}
-          aws_account_id: ${{ vars.ACCOUNT_ID }}
-    
-  terraform_plan:
-    name: "Terraform Plan ${{ inputs.env_name }}"
+          lambda_names: "${{ needs.prerequisites.outputs.lambdas_changed }}"
+          lambdas_root_directory: inputs.lambdas_root_directory
+          python_version: "${{ matrix.python-version }}"
+          aws_role: inputs.aws_oidc_role
+          lambda_code_bucket: inputs.lambda_code_bucket
+
+  terraform_apply:
+    name: "Terraform Apply ${{ inputs.dev_env_name }}"
     runs-on: ubuntu-latest
-    environment: ${{ inputs.env_name }}
-    concurrency: ${{ inputs.env_name }}
+    environment: inputs.dev_env_name
+    concurrency: ${{ inputs.name }}-Dev
     env:
-      TF_VAR_org_environment: ${{ inputs.env_name }}
+      TF_VAR_org_environment: ${{ inputs.dev_env_name }}
       TF_VAR_ecp_release_version: ${{ needs.prerequisites.outputs.ecp_release_version }}
-    needs: 
+    needs:
       - prerequisites
       - lambda_tests_and_package
     steps:
@@ -88,49 +121,24 @@ jobs:
         uses: actions/checkout@v3
 
       - name: Run Terraform
-        uses: IAG-Ent/.github/.github/actions/terraform_run@main
+        uses: IAG-Ent/.github/.github/actions/terraform_run@CRSS-1754-organizations-repo-changes
         with:
-          aws_role: ${{ vars.AWS_OIDC_ROLE }}
-          terraform_action: 'plan'
-          terraform_version: ${{ inputs.tf_version }}
-          tfstate_bucket: ccoe-ecp-${{ vars.ACCOUNT_ID }}-eu-west-1-tfstate
-          tfstate_dynamodb_table: ccoe-ecp-${{ vars.ACCOUNT_ID }}-eu-west-1-tfstate
-          tf_working_dir: ${{ inputs.tf_working_dir }}
-          aws_region: ${{ inputs.aws_region }}
-  
-  terraform_apply:
-    name: "Terraform Apply ${{ inputs.env_name }}"
-    runs-on: ubuntu-latest
-    environment: ${{ inputs.env_name }}
-    concurrency: ${{ inputs.env_name }}
-    env:
-      TF_VAR_org_environment: ${{ inputs.env_name }}
-      TF_VAR_ecp_release_version: ${{ needs.prerequisites.outputs.ecp_release_version }}
-    needs: 
-      - prerequisites
-      - terraform_plan
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-
-      - name: Run Terraform
-        uses: IAG-Ent/.github/.github/actions/terraform_run@main
-        with:
-          aws_role: ${{ vars.AWS_OIDC_ROLE }}
+          aws_role: inputs.aws_oidc_role
           terraform_action: 'apply'
           terraform_version: ${{ inputs.tf_version }}
-          tfstate_bucket: ccoe-ecp-${{ vars.ACCOUNT_ID }}-eu-west-1-tfstate
-          tfstate_dynamodb_table: ccoe-ecp-${{ vars.ACCOUNT_ID }}-eu-west-1-tfstate
+          tfstate_bucket: ccoe-ecp-${{ inputs.aws_account_id }}-eu-west-1-tfstate
+          tfstate_dynamodb_table: ccoe-ecp-${{ inputs.aws_account_id }}-eu-west-1-tfstate
           tf_working_dir: ${{ inputs.tf_working_dir }}
           aws_region: ${{ inputs.aws_region }}
-  
+          jinja_templating: needs.prerequisites.outputs.has_jinja_files
+
   terraform_apply_integration_tests_infra:
     name: "Terraform apply integration test infra"
     needs:
       - terraform_apply
-    concurrency: Dev
     runs-on: ubuntu-latest
-    environment: ${{ inputs.env_name }}
+    environment: inputs.dev_env_name
+    concurrency: ${{ inputs.name }}-Dev
     outputs:
       terraform_apply_output: ${{ steps.tf_apply.outputs.terraform_apply_output }}
     env:
@@ -151,6 +159,7 @@ jobs:
           tfstate_bucket: ccoe-ecp-${{ vars.TEST_ACCOUNT_ID }}-eu-west-1-tfstate
           tfstate_dynamodb_table: ccoe-ecp-${{ vars.TEST_ACCOUNT_ID }}-eu-west-1-tfstate
           tf_working_dir: ${{env.INTG_TEST_INFRASTRUCTURE_DIR}}
+
   integration_tests:
     name: "Integration Tests"
     needs:
@@ -164,7 +173,7 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v3
-      
+
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v2
         with:
@@ -223,7 +232,7 @@ jobs:
     name: "Manual testing"
     timeout-minutes: 180 #3 hours
     runs-on: ubuntu-latest
-    environment: ${{ inputs.protected_env_name }}
+    environment: inputs.protected_env_name
     needs:
       - integration_tests
     steps:
@@ -234,13 +243,14 @@ jobs:
   lambda_tests_and_package_main:
     name: "Run Lambda Tests and Package from origin/main"
     runs-on: ubuntu-latest
-    environment: ${{ inputs.env_name }}
+    environment: inputs.prd_env_name
+    if: inputs.run_lambda_steps == true && needs.prerequisites.outputs.lambdas_changed != ''
     needs:
       - prerequisites
       - wait_revert_command
     strategy:
       matrix:
-        python-version: [ "3.10" ]
+        python-version: [ inputs.lambda_python_version ]
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -248,24 +258,24 @@ jobs:
           ref: main
 
       - name: Run Lambda Tests and Package
-        if: inputs.run_lambda_steps == true
-        uses: IAG-Ent/.github/.github/actions/lambda_tests_and_package@main
+        uses: IAG-Ent/.github/actions/lambda_tests_and_package@CRSS-1754-organizations-repo-changes
         with:
           lambda_names: "${{ needs.prerequisites.outputs.lambdas_changed  }}"
-          python_version_matrix: "${{ matrix.python-version  }}"
-          aws_role: ${{ vars.AWS_OIDC_ROLE }}
-          aws_account_id: ${{ vars.ACCOUNT_ID }}
+          lambdas_root_directory: inputs.lambdas_root_directory
+          python_version: "${{ matrix.python-version }}"
+          aws_role: inputs.aws_oidc_role
+          lambda_code_bucket: inputs.lambda_code_bucket
 
   terraform_apply_main:
     name: "Terraform Apply from origin/main"
     runs-on: ubuntu-latest
-    environment: ${{ inputs.env_name }}
-    concurrency: ${{ inputs.env_name }}
+    environment: inputs.prd_env_name
+    concurrency: ${{ inputs.name }}-Prd
     env:
-      TF_VAR_org_environment: ${{ inputs.env_name }}
+      TF_VAR_org_environment: ${{ inputs.prd_env_name }}
       TF_VAR_ecp_release_version: ${{ needs.prerequisites.outputs.ecp_release_version }}
     if: ${{ always() }}
-    needs: 
+    needs:
       - prerequisites
       - wait_revert_command
       - lambda_tests_and_package_main
@@ -276,12 +286,13 @@ jobs:
           ref: main
 
       - name: Run Terraform
-        uses: IAG-Ent/.github/.github/actions/terraform_run@main
+        uses: IAG-Ent/.github/.github/actions/terraform_run@CRSS-1754-organizations-repo-changes
         with:
-          aws_role: ${{ vars.AWS_OIDC_ROLE }}
+          aws_role: inputs.aws_oidc_role
           terraform_action: 'apply'
           terraform_version: ${{ inputs.tf_version }}
-          tfstate_bucket: ccoe-ecp-${{ vars.ACCOUNT_ID }}-eu-west-1-tfstate
-          tfstate_dynamodb_table: ccoe-ecp-${{ vars.ACCOUNT_ID }}-eu-west-1-tfstate
+          tfstate_bucket: ccoe-ecp-${{ inputs.aws_account_id }}-eu-west-1-tfstate
+          tfstate_dynamodb_table: ccoe-ecp-${{ inputs.aws_account_id }}-eu-west-1-tfstate
           tf_working_dir: ${{ inputs.tf_working_dir }}
           aws_region: ${{ inputs.aws_region }}
+          jinja_templating: needs.prerequisites.outputs.has_jinja_files
